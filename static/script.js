@@ -439,18 +439,44 @@ function loadVideoView(data) {
 
     // Populate video resolutions list
     resolutionSelect.innerHTML = '';
+    let resolutions = [];
     if (data.resolutions && data.resolutions.length > 0) {
-        data.resolutions.forEach(res => {
-            const opt = document.createElement('option');
-            opt.value = res;
-            opt.textContent = `${res}p`;
-            resolutionSelect.appendChild(opt);
-        });
+        resolutions = [...data.resolutions.map(Number)];
+        if (!resolutions.includes(1080)) resolutions.push(1080);
+        if (!resolutions.includes(720)) resolutions.push(720);
+        if (!resolutions.includes(480)) resolutions.push(480);
+        if (!resolutions.includes(360)) resolutions.push(360);
     } else {
+        resolutions = [1080, 720, 480, 360];
+    }
+
+    // Sort descending
+    resolutions.sort((a, b) => b - a);
+
+    resolutions.forEach(res => {
         const opt = document.createElement('option');
-        opt.value = '720';
-        opt.textContent = '720p (Default)';
+        opt.value = res.toString();
+        if (res >= 2160) {
+            opt.textContent = `${res}p (4K UHD)`;
+        } else if (res >= 1440) {
+            opt.textContent = `${res}p (2K QHD)`;
+        } else if (res === 1080) {
+            opt.textContent = '1080p (Full HD)';
+        } else if (res === 720) {
+            opt.textContent = '720p (HD)';
+        } else if (res === 480) {
+            opt.textContent = '480p (SD)';
+        } else {
+            opt.textContent = `${res}p`;
+        }
         resolutionSelect.appendChild(opt);
+    });
+
+    // Default select 1080p if available, else 720p
+    if (resolutions.includes(1080)) {
+        resolutionSelect.value = '1080';
+    } else if (resolutions.includes(720)) {
+        resolutionSelect.value = '720';
     }
 
     // Toggle display formatting dropdowns

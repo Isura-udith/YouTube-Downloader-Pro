@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="YT Downloader Pro — Download YouTube videos and playlists as high-quality MP4 or MP3 files with trimming, metadata embedding, and subtitle support.">
+    <meta name="theme-color" content="#0b0f19">
+    <title>YT Downloader Pro</title>
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21.58 6.55C21.43 5.98 20.98 5.53 20.4 5.38C18.66 4.91 12 4.91 12 4.91C12 4.91 5.34 4.91 3.6 5.38C3.02 5.53 2.57 5.98 2.42 6.55C1.95 8.29 1.95 12 1.95 12C1.95 12 1.95 15.71 2.42 17.45C2.57 18.02 3.02 18.47 3.6 18.62C5.34 19.09 12 19.09 12 19.09C12 19.09 18.66 19.09 20.4 18.62C20.98 18.47 21.43 18.02 21.58 17.45C22.05 15.71 22.05 12 22.05 12C22.05 12 22.05 8.29 21.58 6.55Z' fill='%23FF0000'/%3E%3Cpath d='M9.95 15.02L15.22 12L9.95 8.98V15.02Z' fill='white'/%3E%3C/svg%3E">
+    <!-- Modern font -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Background glowing orbs -->
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+    <div class="glow-orb orb-3"></div>
+
+    <div class="app-container">
+        <!-- Sidebar / Navigation Tabs -->
+        <nav class="sidebar">
+            <div class="logo-area">
+                <div class="logo-brand">
+                    <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M21.58 6.55C21.43 5.98 20.98 5.53 20.4 5.38C18.66 4.91 12 4.91 12 4.91C12 4.91 5.34 4.91 3.6 5.38C3.02 5.53 2.57 5.98 2.42 6.55C1.95 8.29 1.95 12 1.95 12C1.95 12 1.95 15.71 2.42 17.45C2.57 18.02 3.02 18.47 3.6 18.62C5.34 19.09 12 19.09 12 19.09C12 19.09 18.66 19.09 20.4 18.62C20.98 18.47 21.43 18.02 21.58 17.45C22.05 15.71 22.05 12 22.05 12C22.05 12 22.05 8.29 21.58 6.55Z" fill="url(#logoGrad)"/>
+                        <path d="M9.95 15.02L15.22 12L9.95 8.98V15.02Z" fill="white"/>
+                        <defs>
+                            <linearGradient id="logoGrad" x1="1.95" y1="12" x2="22.05" y2="12" gradientUnits="userSpaceOnUse">
+                                <stop stop-color="#FF0000"/>
+                                <stop offset="1" stop-color="#CD201F"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                    <span class="logo-text">YT Downloader</span>
+                </div>
+            </div>
+            
+            <div class="nav-links">
+                <button class="nav-btn active" data-tab="downloader">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                    Downloader
+                </button>
+                <button class="nav-btn" data-tab="queue">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    Active Queue
+                    <span id="queue-badge" class="badge hidden">0</span>
+                </button>
+                <button class="nav-btn" data-tab="history">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    History
+                </button>
+                <button class="nav-btn" data-tab="settings">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    Settings
+                </button>
+            </div>
+            
+            <!-- Desktop Download Section -->
+            <div class="desktop-download-area">
+                <a href="{{ desktop_app_url }}" download class="nav-btn download-exe-btn">
+                    Download Desktop App
+                </a>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- DOWNLOADER TAB -->
+            <section id="downloader-tab" class="tab-pane active">
+                <div class="glass-card header-card">
+                    <h1>Download Videos & Playlists</h1>
+                    <p class="subtitle">Convert YouTube videos to High Quality MP4 or MP3 instantly</p>
+                    
+                    <div class="input-section">
+                        <div class="input-wrapper">
+                        <input type="text" id="url-input" placeholder="Paste YouTube link or type keywords to search..." autocomplete="off" aria-label="YouTube URL or search query">
+                            <button id="clear-btn" class="clear-btn hidden" aria-label="Clear input">&times;</button>
+                        </div>
+                        <button id="fetch-btn" aria-label="Search or fetch video info">
+                            <span class="btn-text">Search / Fetch</span>
+                            <div class="spinner hidden"></div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- SUGGESTIONS CONTAINER -->
+                <div id="suggestions-section" class="suggestions-section glass-card">
+                    <div class="suggestions-header">
+                        <div class="suggestions-title-group">
+                            <div class="title-with-refresh">
+                                <h3>Trending & Recommendations</h3>
+                                <button id="refresh-suggestions-btn" class="refresh-btn" title="Refresh Recommendations">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="refresh-icon">
+                                        <polyline points="23 4 23 10 17 10"></polyline>
+                                        <polyline points="1 20 1 14 7 14"></polyline>
+                                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="suggestions-subtitle">Quick select and download popular songs and videos</p>
+                        </div>
+                        <div class="suggestions-tabs">
+                            <button class="suggestion-tab-btn active" data-category="all">All</button>
+                            <button class="suggestion-tab-btn" data-category="music">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Songs
+                            </button>
+                            <button class="suggestion-tab-btn" data-category="video">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>Videos
+                            </button>
+                        </div>
+                    </div>
+                    <div class="suggestions-grid" id="suggestions-grid">
+                        <!-- Skeleton loader items -->
+                        <div class="skeleton-card">
+                            <div class="skeleton-thumb"></div>
+                            <div class="skeleton-title"></div>
+                            <div class="skeleton-uploader"></div>
+                        </div>
+                        <div class="skeleton-card">
+                            <div class="skeleton-thumb"></div>
+                            <div class="skeleton-title"></div>
+                            <div class="skeleton-uploader"></div>
+                        </div>
+                        <div class="skeleton-card">
+                            <div class="skeleton-thumb"></div>
+                            <div class="skeleton-title"></div>
+                            <div class="skeleton-uploader"></div>
+                        </div>
+                        <div class="skeleton-card">
+                            <div class="skeleton-thumb"></div>
+                            <div class="skeleton-title"></div>
+                            <div class="skeleton-uploader"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="ffmpeg-warning" class="warning-banner hidden">
+                    <strong>Warning:</strong> FFmpeg is not installed on this system. High-resolution MP4 (1080p+) and MP3 conversion will be disabled. Only 720p or lower MP4 formats will be available.
+                </div>
+
+                <div id="error-message" class="error-message hidden">
+                    Something went wrong. Please check the URL and try again.
+                </div>
+
+                <!-- SEARCH RESULTS CONTAINER -->
+                <div id="search-results-section" class="search-results-section glass-card hidden">
+                    <div class="search-results-header">
+                        <h3>Search Results</h3>
+                        <button id="close-search-btn" class="close-search-btn" title="Close search results">&times;</button>
+                    </div>
+                    <div class="search-results-grid" id="search-results-grid">
+                        <!-- Filled dynamically -->
+                    </div>
+                </div>
+
+                <!-- VIDEO INFO CONTAINER -->
+                <div id="video-info" class="video-info glass-card hidden">
+                    <div class="video-preview-grid">
+                        <div class="thumbnail-container">
+                            <img id="video-thumbnail" src="" alt="Thumbnail">
+                            <span class="duration-badge" id="video-duration">0:00</span>
+                        </div>
+                        <div class="details">
+                            <h2 id="video-title">Video Title</h2>
+                            <div class="options">
+                                <div class="option-group">
+                                    <label for="format-select">Download Format</label>
+                                    <select id="format-select">
+                                        <option value="mp4">MP4 (Video + Audio)</option>
+                                        <option value="mp3">MP3 (Audio Only)</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="option-group" id="resolution-group">
+                                    <label for="resolution-select">Video Quality</label>
+                                    <select id="resolution-select">
+                                        <!-- Populated dynamically -->
+                                    </select>
+                                </div>
+
+                                <div class="option-group hidden" id="bitrate-group">
+                                    <label for="bitrate-select">Audio Quality</label>
+                                    <select id="bitrate-select">
+                                        <option value="320">320 kbps (Ultra)</option>
+                                        <option value="256">256 kbps (High)</option>
+                                        <option value="192" selected>192 kbps (Medium)</option>
+                                        <option value="128">128 kbps (Standard)</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="option-group" id="location-group">
+                                    <label for="location-select">Save To</label>
+                                    <select id="location-select">
+                                        <!-- Populated dynamically -->
+                                    </select>
+                                </div>
+
+                                <div class="option-group hidden" id="metadata-group">
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="metadata-checkbox" checked>
+                                        <span class="checkmark"></span>
+                                        Embed Artwork & Tags
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Trim options expandable container -->
+                            <div class="trim-options-container">
+                                <button type="button" class="collapse-trigger" id="trim-toggle-btn">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+                                    <span>Trim Video/Audio (Optional)</span>
+                                    <svg class="chevron-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                                </button>
+                                <div class="trim-inputs-wrapper hidden" id="trim-inputs-wrapper">
+                                    <div class="trim-input-group">
+                                        <label for="trim-start">Start Time (HH:MM:SS / MM:SS / Sec)</label>
+                                        <input type="text" id="trim-start" placeholder="e.g. 00:30">
+                                    </div>
+                                    <div class="trim-input-group">
+                                        <label for="trim-end">End Time (HH:MM:SS / MM:SS / Sec)</label>
+                                        <input type="text" id="trim-end" placeholder="e.g. 02:15">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="subtitles-option option-group" id="subtitles-group">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="subtitles-checkbox">
+                                    <span class="checkmark"></span>
+                                    Download English Subtitles (if available)
+                                </label>
+                            </div>
+
+                            <button id="download-btn" class="primary-btn">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                Add to Download Queue
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PLAYLIST CONTAINER -->
+                <div id="playlist-info" class="playlist-info glass-card hidden">
+                    <div class="playlist-header">
+                        <div class="playlist-meta">
+                            <span class="playlist-tag">PLAYLIST</span>
+                            <h2 id="playlist-title">Playlist Title</h2>
+                            <p id="playlist-count">0 Videos</p>
+                        </div>
+                        <div class="playlist-options">
+                            <div class="option-group">
+                                <label for="playlist-format-select">Format</label>
+                                <select id="playlist-format-select">
+                                    <option value="mp4">MP4 (Video)</option>
+                                    <option value="mp3">MP3 (Audio)</option>
+                                </select>
+                            </div>
+                            <div class="option-group" id="playlist-resolution-group">
+                                <label for="playlist-resolution-select">Resolution</label>
+                                <select id="playlist-resolution-select">
+                                    <option value="1080">1080p</option>
+                                    <option value="720" selected>720p</option>
+                                    <option value="480">480p</option>
+                                    <option value="360">360p</option>
+                                </select>
+                            </div>
+                            <div class="option-group hidden" id="playlist-bitrate-group">
+                                <label for="playlist-bitrate-select">Bitrate</label>
+                                <select id="playlist-bitrate-select">
+                                    <option value="320">320 kbps</option>
+                                    <option value="256">256 kbps</option>
+                                    <option value="192" selected>192 kbps</option>
+                                    <option value="128">128 kbps</option>
+                                </select>
+                            </div>
+                            <div class="option-group" id="playlist-location-group">
+                                <label for="playlist-location-select">Save To</label>
+                                <select id="playlist-location-select">
+                                    <!-- Populated dynamically -->
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="playlist-selection-controls">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="select-all-checkbox" checked>
+                            <span class="checkmark"></span>
+                            Select All
+                        </label>
+                        <button id="playlist-download-btn" class="primary-btn">
+                            Download Selected (<span id="selected-count">0</span>)
+                        </button>
+                    </div>
+
+                    <div class="playlist-entries" id="playlist-entries-list">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- QUEUE TAB -->
+            <section id="queue-tab" class="tab-pane">
+                <div class="tab-header-flex">
+                    <div class="tab-header">
+                        <h2>Active Downloads</h2>
+                        <p class="tab-subtitle">Track and manage your running tasks</p>
+                    </div>
+                    <button id="clear-queue-btn" class="action-btn secondary-action-btn">Clear Finished</button>
+                </div>
+                <div id="queue-list" class="queue-list">
+                    <!-- Queue items will be generated here dynamically -->
+                    <div class="empty-state">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <p>No active downloads at the moment.</p>
+                        <button class="empty-btn" onclick="switchTab('downloader')">Start a Download</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- HISTORY TAB -->
+            <section id="history-tab" class="tab-pane">
+                <div class="tab-header-flex">
+                    <div class="tab-header">
+                        <h2>Completed Downloads</h2>
+                        <p class="tab-subtitle">Access your converted media files</p>
+                    </div>
+                    <button id="clear-history-btn" class="action-btn danger-action-btn">Clear All History</button>
+                </div>
+                <div id="history-list" class="history-list">
+                    <!-- History items will be generated here dynamically -->
+                    <div class="empty-state">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M9 12l2 2 4-4"/></svg>
+                        <p>No download history found.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SETTINGS TAB -->
+            <section id="settings-tab" class="tab-pane">
+                <div class="tab-header">
+                    <h2>Settings</h2>
+                    <p class="tab-subtitle">Configure download paths and storage preferences</p>
+                </div>
+                
+                <div class="glass-card settings-card">
+                    <h3>Download Locations</h3>
+                    <p class="section-description">Manage folders where downloads are saved on this system. You can define multiple paths and set one as active.</p>
+                    
+                    <div class="add-location-form">
+                        <div class="form-row">
+                            <div class="input-group">
+                                <label for="new-location-name">Location Name</label>
+                                <input type="text" id="new-location-name" placeholder="e.g. My Videos, External..." autocomplete="off">
+                            </div>
+                            <div class="input-group">
+                                <label for="new-location-path">Absolute Folder Path</label>
+                                <input type="text" id="new-location-path" placeholder="e.g. C:\Downloads or /Users/Name/Downloads" autocomplete="off">
+                            </div>
+                        </div>
+                        <button id="add-location-btn" class="primary-btn">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            Add Location
+                        </button>
+                    </div>
+                    
+                    <div id="settings-error" class="error-message hidden"></div>
+                    <div id="settings-success" class="success-message hidden">Location added successfully!</div>
+                    
+                    <div class="locations-table-container">
+                        <table class="locations-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Folder Path</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="locations-list-tbody">
+                                <!-- Loaded dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- COMBINATION LINK SELECTION MODAL -->
+    <div id="link-modal" class="modal-overlay hidden">
+        <div class="modal-box glass-card">
+            <h3>Link Contains Playlist</h3>
+            <p>This YouTube URL contains both a specific video and a playlist. What would you like to load?</p>
+            <div class="modal-buttons">
+                <button id="modal-video-btn" class="modal-btn secondary">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
+                    Single Video Only
+                </button>
+                <button id="modal-playlist-btn" class="modal-btn primary">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                    Entire Playlist
+                </button>
+            </div>
+            <button id="modal-cancel-btn" class="modal-close-btn">&times;</button>
+        </div>
+    </div>
+
+    <!-- IN-APP MEDIA PLAYER MODAL -->
+    <div id="player-modal" class="modal-overlay hidden">
+        <div class="modal-box player-modal-box glass-card">
+            <h3 id="player-title" class="player-title">Media Player</h3>
+            <div class="player-container">
+                <video id="player-video" controls class="player-element hidden"></video>
+                <audio id="player-audio" controls class="player-element hidden"></audio>
+            </div>
+            <div class="player-footer">
+                <button id="player-close-btn" class="modal-btn secondary">Close Player</button>
+            </div>
+            <button id="player-modal-close-x" class="modal-close-btn">&times;</button>
+        </div>
+    </div>
+
+    <script src="/static/script.js?v=2"></script>
+</body>
+</html>

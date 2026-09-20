@@ -1,0 +1,10 @@
+{
+  "locations": [
+    {
+      "id": "default",
+      "name": "Default Downloads",
+      "path": "D:\\Software\\YT Download\\downloads",
+      "is_default": true
+    }
+  ]
+}

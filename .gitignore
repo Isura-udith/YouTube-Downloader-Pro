@@ -1,0 +1,40 @@
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python Bytecode Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller & Packaging Build Artifacts
+build/
+dist/
+msix_build/
+*.spec
+static/dist/
+
+# Portable Binaries
+ffmpeg.exe
+ffprobe.exe
+
+# Application Runtime Data
+downloads/*
+!downloads/.gitkeep
+downloads_history.json
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Operating System Files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs
+*.log

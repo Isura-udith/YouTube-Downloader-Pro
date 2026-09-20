@@ -84,6 +84,7 @@ class YTDownloaderIntegrationTestCase(unittest.TestCase):
         # Test streaming file by ID
         stream_res = self.client.get(f'/api/files/by-id/{download_id}')
         self.assertEqual(stream_res.status_code, 200)
+        stream_res.close()
         print("Streaming by ID verified successfully.")
 
 if __name__ == '__main__':

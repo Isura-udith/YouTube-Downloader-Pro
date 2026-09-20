@@ -152,7 +152,8 @@ function formatTimeAgo(isoString) {
 
 // Client-side time parser (matches backend parse_time_to_seconds)
 function parseTimeToSecondsClient(timeStr) {
-    if (!timeStr) return null;
+    if (timeStr === null || timeStr === undefined) return null;
+    if (typeof timeStr === 'number') return isNaN(timeStr) ? null : timeStr;
     timeStr = String(timeStr).trim();
     if (!timeStr) return null;
 
@@ -429,7 +430,11 @@ modalCancelBtn.addEventListener('click', () => {
 // Populate and display single video options card
 function loadVideoView(data) {
     videoTitle.textContent = data.title;
-    videoThumbnail.src = data.thumbnail;
+    videoThumbnail.src = data.thumbnail || '/static/logo-placeholder.png';
+    videoThumbnail.onerror = () => {
+        videoThumbnail.onerror = null;
+        videoThumbnail.src = '/static/logo-placeholder.png';
+    };
     videoDuration.textContent = formatSeconds(data.duration);
 
     // Populate video resolutions list
@@ -492,14 +497,14 @@ downloadBtn.addEventListener('click', async () => {
     const start_time = trimStart ? trimStart.value.trim() : '';
     const end_time = trimEnd ? trimEnd.value.trim() : '';
 
-    if (start_time || end_time) {
+    if (start_time !== '' || end_time !== '') {
         const sSec = parseTimeToSecondsClient(start_time);
         const eSec = parseTimeToSecondsClient(end_time);
-        if (start_time && sSec === null) {
+        if (start_time !== '' && sSec === null) {
             alert('Invalid Start Time format. Use MM:SS or seconds (e.g. 00:30)');
             return;
         }
-        if (end_time && eSec === null) {
+        if (end_time !== '' && eSec === null) {
             alert('Invalid End Time format. Use MM:SS or seconds (e.g. 02:15)');
             return;
         }
@@ -567,7 +572,7 @@ function loadPlaylistView(data) {
                 <input type="checkbox" class="entry-checkbox" data-id="${escapeHtml(entry.id)}" data-title="${escapeHtml(entry.title)}" data-thumb="${escapeHtml(entry.thumbnail || '')}" data-duration="${entry.duration || 0}" checked>
                 <span class="checkmark"></span>
             </label>
-            <img class="playlist-entry-thumbnail" src="${escapeHtml(entry.thumbnail || '/static/logo-placeholder.png')}" alt="">
+            <img class="playlist-entry-thumbnail" src="${escapeHtml(entry.thumbnail || '/static/logo-placeholder.png')}" alt="" onerror="this.onerror=null;this.src='/static/logo-placeholder.png';">
             <span class="playlist-entry-title" title="${escapeHtml(entry.title)}">${escapeHtml(entry.title)}</span>
             <span class="playlist-entry-duration">${formatSeconds(entry.duration)}</span>
         `;
@@ -762,7 +767,7 @@ var renderQueueList = function(activeDownloads) {
 
         html += `
             <div class="queue-item" id="queue-item-${id}">
-                <img class="queue-thumbnail" src="${escapeHtml(dl.thumbnail || '/static/logo-placeholder.png')}" alt="">
+                <img class="queue-thumbnail" src="${escapeHtml(dl.thumbnail || '/static/logo-placeholder.png')}" alt="" onerror="this.onerror=null;this.src='/static/logo-placeholder.png';">
                 <div class="queue-details">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <span class="queue-title" title="${escapeHtml(dl.title)}">${escapeHtml(dl.title)}</span>
@@ -836,7 +841,7 @@ function renderHistoryList(historyItems) {
         
         html += `
             <div class="history-item" id="history-item-${item.download_id}">
-                <img class="queue-thumbnail" src="${escapeHtml(item.thumbnail || '/static/logo-placeholder.png')}" alt="">
+                <img class="queue-thumbnail" src="${escapeHtml(item.thumbnail || '/static/logo-placeholder.png')}" alt="" onerror="this.onerror=null;this.src='/static/logo-placeholder.png';">
                 <div class="history-details">
                     <span class="history-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</span>
                     <div class="history-meta">
@@ -1072,7 +1077,7 @@ function renderSearchResults(results) {
         card.className = 'search-result-card';
         card.innerHTML = `
             <div class="search-result-thumb-container">
-                <img class="search-result-thumb" src="${escapeHtml(item.thumbnail || '/static/logo-placeholder.png')}" alt="Thumbnail">
+                <img class="search-result-thumb" src="${escapeHtml(item.thumbnail || '/static/logo-placeholder.png')}" alt="Thumbnail" onerror="this.onerror=null;this.src='/static/logo-placeholder.png';">
                 <span class="search-result-duration">${formatSeconds(item.duration)}</span>
             </div>
             <div class="search-result-info">
@@ -1237,7 +1242,7 @@ function renderSuggestions(category = 'all') {
         card.innerHTML = `
             <div class="suggestion-type-badge ${badgeClass}">${badgeLabel}</div>
             <div class="suggestion-thumb-container">
-                <img class="suggestion-thumb" src="${item.thumbnail || '/static/logo-placeholder.png'}" alt="Thumbnail">
+                <img class="suggestion-thumb" src="${escapeHtml(item.thumbnail || '/static/logo-placeholder.png')}" alt="Thumbnail" onerror="this.onerror=null;this.src='/static/logo-placeholder.png';">
                 <span class="suggestion-duration">${formatSeconds(item.duration)}</span>
             </div>
             <div class="suggestion-info">

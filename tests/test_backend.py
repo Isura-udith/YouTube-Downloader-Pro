@@ -76,7 +76,44 @@ class YTDownloaderBackendTestCase(unittest.TestCase):
             self.assertIn('file_exists', item)
             self.assertIsInstance(item['file_exists'], bool)
 
+    def test_parse_time_to_seconds(self):
+        # Numerical 0 and 0.0
+        self.assertEqual(app.parse_time_to_seconds(0), 0.0)
+        self.assertEqual(app.parse_time_to_seconds(0.0), 0.0)
+
+        # String 0 and formatted timestamps
+        self.assertEqual(app.parse_time_to_seconds("0"), 0.0)
+        self.assertEqual(app.parse_time_to_seconds("00:00"), 0.0)
+        self.assertEqual(app.parse_time_to_seconds("00:30"), 30.0)
+        self.assertEqual(app.parse_time_to_seconds("01:30"), 90.0)
+        self.assertEqual(app.parse_time_to_seconds("01:04:30"), 3870.0)
+        self.assertEqual(app.parse_time_to_seconds("1.30"), 90.0)
+        self.assertEqual(app.parse_time_to_seconds("45.5"), 45.5)
+
+        # None, empty, and invalid formats
+        self.assertIsNone(app.parse_time_to_seconds(None))
+        self.assertIsNone(app.parse_time_to_seconds(""))
+        self.assertIsNone(app.parse_time_to_seconds("   "))
+        self.assertIsNone(app.parse_time_to_seconds("invalid_time"))
+
     def test_api_download_trim_validation(self):
+        # Valid start_time=0 and end_time=10
+        res = self.client.post('/api/download', json={
+            'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+            'start_time': 0,
+            'end_time': 10
+        })
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('download_id', res.get_json())
+
+        # Valid string "00:00" and "00:15"
+        res = self.client.post('/api/download', json={
+            'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+            'start_time': '00:00',
+            'end_time': '00:15'
+        })
+        self.assertEqual(res.status_code, 200)
+
         # Negative start time
         res = self.client.post('/api/download', json={
             'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
@@ -94,6 +131,14 @@ class YTDownloaderBackendTestCase(unittest.TestCase):
         })
         self.assertEqual(res.status_code, 400)
         self.assertIn('error', res.get_json())
+
+        # End time <= 0
+        res = self.client.post('/api/download', json={
+            'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+            'start_time': 0,
+            'end_time': 0
+        })
+        self.assertEqual(res.status_code, 400)
 
     def test_api_files_by_id_missing(self):
         res = self.client.get('/api/files/by-id/nonexistent_id')

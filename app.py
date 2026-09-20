@@ -168,10 +168,11 @@ def load_settings():
             try:
                 with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    has_default = any(loc.get('id') == 'default' for loc in data.get('locations', []))
-                    if not has_default:
-                        data.setdefault('locations', []).append(default_settings['locations'][0])
-                    return data
+                    if isinstance(data, dict):
+                        has_default = any(loc.get('id') == 'default' for loc in data.get('locations', []))
+                        if not has_default:
+                            data.setdefault('locations', []).append(default_settings['locations'][0])
+                        return data
             except Exception as e:
                 logger.warning('Failed to load settings: %s', e)
                 return default_settings
@@ -220,7 +221,8 @@ def cleanup_old_downloads():
                     ts = datetime.datetime.fromisoformat(item.get('timestamp'))
                     age = (now - ts).total_seconds()
                 except Exception:
-                    age = 999999
+                    # Default to 0 (recent) so unparseable timestamps aren't accidentally deleted
+                    age = 0
                     
                 if age > 7200:  # 2 hours
                     filepath = item.get('filepath')
@@ -273,7 +275,10 @@ def load_history():
         if os.path.exists(HISTORY_FILE):
             try:
                 with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        return data
+                    return []
             except Exception as e:
                 logger.warning('Failed to load history: %s', e)
                 return []
@@ -281,6 +286,33 @@ def load_history():
 
 def save_history(history):
     save_json_atomic(HISTORY_FILE, history)
+
+def add_history_item(history_item):
+    """Thread-safe and atomic prepend to persistent history."""
+    with file_io_lock:
+        history = []
+        if os.path.exists(HISTORY_FILE):
+            try:
+                with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        history = data
+            except Exception as e:
+                logger.warning('Failed to load history in add_history_item: %s', e)
+                history = []
+        history.insert(0, history_item)
+        temp_filepath = f"{HISTORY_FILE}.{uuid.uuid4().hex}.tmp"
+        try:
+            with open(temp_filepath, 'w', encoding='utf-8') as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+            os.replace(temp_filepath, HISTORY_FILE)
+        except Exception as e:
+            if os.path.exists(temp_filepath):
+                try:
+                    os.remove(temp_filepath)
+                except Exception:
+                    pass
+            logger.error('Failed to save %s in add_history_item: %s', HISTORY_FILE, e)
 
 def parse_youtube_url(url):
     url = url.strip()
@@ -306,8 +338,11 @@ def parse_youtube_url(url):
         playlist_id = query.get('list', [None])[0]
         if not video_id:
             parts = [p for p in parsed.path.split('/') if p]
-            if len(parts) >= 2 and parts[0] in ('shorts', 'live', 'embed', 'v'):
+            if len(parts) >= 2 and parts[0] in ('shorts', 'live', 'embed', 'v', 'e', 'watch'):
                 video_id = parts[1]
+            elif len(parts) == 1 and parts[0] not in ('playlist', 'results', 'channel', 'feed', 'c', 'user'):
+                if len(parts[0]) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', parts[0]):
+                    video_id = parts[0]
 
     # Filter out unviewable/dynamic playlists (e.g. YouTube Mixes, Liked, Watch Later, Uploads radio)
     if playlist_id:
@@ -359,6 +394,8 @@ def get_info():
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            if not info:
+                return jsonify({'error': 'Could not extract info from URL', 'code': 'EXTRACTION_FAILED'}), 404
             
             if info.get('_type') == 'playlist':
                 entries = []
@@ -404,8 +441,10 @@ def get_info():
         return jsonify({'error': str(e), 'code': 'EXTRACTION_FAILED'}), 500
 
 def parse_time_to_seconds(time_str):
-    if not time_str:
+    if time_str is None:
         return None
+    if isinstance(time_str, (int, float)):
+        return float(time_str)
     time_str = str(time_str).strip()
     if not time_str:
         return None
@@ -420,7 +459,7 @@ def parse_time_to_seconds(time_str):
             time_str = time_str.replace('.', ':')
 
     try:
-        # If it's a pure number of seconds (e.g., "45" or "45.5")
+        # If it's a pure number of seconds (e.g., "45" or "45.5" or "0")
         if ':' not in time_str:
             return float(time_str)
     except ValueError:
@@ -544,7 +583,7 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
         # Use default args to capture current values (avoids late-binding closure bug)
         def _make_ranges(s=start_s, e=end_s):
             def _ranges(info_dict, ydl):
-                return [{'start_time': s or 0.0, 'end_time': e or float('inf')}]
+                return [{'start_time': s if s is not None else 0.0, 'end_time': e if e is not None else float('inf')}]
             return _ranges
         ydl_opts['download_ranges'] = _make_ranges()
 
@@ -611,6 +650,8 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
+            if not info:
+                raise ValueError("Download produced no info from yt-dlp")
             actual_title = info.get('title', title or 'video')
             downloads[download_id]['title'] = actual_title
             
@@ -635,10 +676,13 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
                 else:
                     # Search matching base
                     base_no_ext = os.path.splitext(os.path.basename(filename))[0]
-                    for f in os.listdir(target_dir):
-                        if f.startswith(base_no_ext) and (f.endswith(download_type) or f.endswith(expected_ext)):
-                            expected_filename = os.path.join(target_dir, f)
-                            break
+                    try:
+                        for f in os.listdir(target_dir):
+                            if f.startswith(base_no_ext) and (f.endswith(download_type) or f.endswith(expected_ext)):
+                                expected_filename = os.path.join(target_dir, f)
+                                break
+                    except Exception as e:
+                        logger.warning('Could not list target_dir %s: %s', target_dir, e)
                     if not expected_filename:
                         expected_filename = candidate
                         
@@ -651,7 +695,7 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
             
             logger.info('Download completed: %s -> %s', actual_title, expected_filename)
             
-            # Save to persistent history
+            # Save to persistent history atomically
             history_item = {
                 'download_id': download_id,
                 'client_id': client_id,
@@ -666,9 +710,7 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
                 'filesize': downloads[download_id].get('filesize', 'Unknown'),
                 'timestamp': datetime.datetime.now().isoformat()
             }
-            history = load_history()
-            history.insert(0, history_item)
-            save_history(history)
+            add_history_item(history_item)
             
     except Exception as e:
         with downloads_lock:
@@ -806,9 +848,9 @@ def start_download():
     # Validate trimming inputs
     start_s = parse_time_to_seconds(start_time)
     end_s = parse_time_to_seconds(end_time)
-    if start_time and start_s is None:
+    if start_time is not None and str(start_time).strip() != '' and start_s is None:
         return jsonify({'error': 'Invalid start time format. Use MM:SS or seconds.', 'code': 'INVALID_START_TIME'}), 400
-    if end_time and end_s is None:
+    if end_time is not None and str(end_time).strip() != '' and end_s is None:
         return jsonify({'error': 'Invalid end time format. Use MM:SS or seconds.', 'code': 'INVALID_END_TIME'}), 400
     if start_s is not None and start_s < 0:
         return jsonify({'error': 'Start time cannot be negative.', 'code': 'NEGATIVE_START_TIME'}), 400
@@ -880,7 +922,7 @@ def delete_history_item(download_id):
     history = load_history()
     item_to_delete = None
     for item in history:
-        if item['download_id'] == download_id:
+        if item.get('download_id') == download_id:
             if not is_local_mode() and client_id and item.get('client_id') != client_id:
                 return jsonify({'error': 'Unauthorized'}), 403
             item_to_delete = item
@@ -891,8 +933,8 @@ def delete_history_item(download_id):
         save_history(history)
         
         # Delete local file to save space
-        filepath = item_to_delete.get('filepath') or os.path.join(DOWNLOAD_DIR, item_to_delete['filename'])
-        if os.path.exists(filepath):
+        filepath = item_to_delete.get('filepath') or (os.path.join(DOWNLOAD_DIR, item_to_delete['filename']) if item_to_delete.get('filename') else None)
+        if filepath and os.path.exists(filepath):
             try:
                 os.remove(filepath)
             except Exception:
@@ -913,8 +955,8 @@ def clear_all_history():
         for item in history:
             if item.get('client_id') == client_id:
                 if delete_files:
-                    filepath = item.get('filepath') or os.path.join(DOWNLOAD_DIR, item['filename'])
-                    if os.path.exists(filepath):
+                    filepath = item.get('filepath') or (os.path.join(DOWNLOAD_DIR, item['filename']) if item.get('filename') else None)
+                    if filepath and os.path.exists(filepath):
                         try:
                             os.remove(filepath)
                         except Exception:
@@ -925,8 +967,8 @@ def clear_all_history():
     else:
         if delete_files:
             for item in history:
-                filepath = item.get('filepath') or os.path.join(DOWNLOAD_DIR, item['filename'])
-                if os.path.exists(filepath):
+                filepath = item.get('filepath') or (os.path.join(DOWNLOAD_DIR, item['filename']) if item.get('filename') else None)
+                if filepath and os.path.exists(filepath):
                     try:
                         os.remove(filepath)
                     except Exception:
@@ -1356,8 +1398,9 @@ def get_suggestions():
             return jsonify(dynamic_suggestions)
     return jsonify(SUGGESTIONS)
 
-@app.route('/api/files/<filename>', methods=['GET'])
+@app.route('/api/files/<path:filename>', methods=['GET'])
 def serve_file(filename):
+    filename = os.path.basename(filename)
     client_id = request.args.get('client_id') or request.headers.get('X-Client-ID')
     download = request.args.get('download', 'false').lower() == 'true'
     # Safe serving of files from their actual downloaded directories
@@ -1409,12 +1452,17 @@ def open_folder():
     download_id = data.get('download_id')
     history = load_history()
     for item in history:
-        if item['download_id'] == download_id:
+        if item.get('download_id') == download_id:
             filepath = item.get('filepath')
             if filepath and os.path.exists(filepath):
                 try:
                     import subprocess
-                    subprocess.Popen(['explorer', f'/select,{os.path.abspath(filepath)}'])
+                    if sys.platform == 'win32':
+                        subprocess.Popen(['explorer', f'/select,{os.path.abspath(filepath)}'])
+                    elif sys.platform == 'darwin':
+                        subprocess.Popen(['open', '-R', filepath])
+                    else:
+                        subprocess.Popen(['xdg-open', os.path.dirname(filepath)])
                     return jsonify({'success': True})
                 except Exception as e:
                     return jsonify({'error': str(e)}), 500
@@ -1432,6 +1480,8 @@ if __name__ == '__main__':
     if not getattr(sys, 'frozen', False) and sys.prefix == sys.base_prefix:
         _app_dir = os.path.dirname(os.path.abspath(__file__))
         _venv_py = os.path.join(_app_dir, '.venv', 'Scripts', 'python.exe')
+        if not os.path.exists(_venv_py):
+            _venv_py = os.path.join(_app_dir, '.venv', 'bin', 'python')
         if os.path.exists(_venv_py) and os.environ.get('__YT_DOWN_VENV_SWITCHED') != '1':
             import subprocess
             os.environ['__YT_DOWN_VENV_SWITCHED'] = '1'

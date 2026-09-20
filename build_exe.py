@@ -34,6 +34,20 @@ def build_exe():
         '--clean'
     ]
     
+    # Generate and include application icon if available
+    icon_path = 'app_icon.ico'
+    if not os.path.exists(icon_path) and os.path.exists('store_logo_source.png'):
+        try:
+            from PIL import Image
+            img = Image.open('store_logo_source.png')
+            img.save(icon_path, format='ICO', sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])
+            print(f"Generated {icon_path} from store_logo_source.png")
+        except Exception as e:
+            print(f"Could not generate {icon_path}: {e}")
+    if os.path.exists(icon_path):
+        print(f"Bundling icon: {icon_path}")
+        args.append(f'--icon={icon_path}')
+
     # Include ffmpeg.exe and ffprobe.exe if they exist in the root folder
     if os.path.exists('ffmpeg.exe'):
         print("Found ffmpeg.exe. Bundling it...")

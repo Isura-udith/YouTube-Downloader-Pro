@@ -21,21 +21,21 @@ def install_pillow():
 
 def find_sdk_tool(tool_name):
     """Locates SDK tools (makeappx.exe, signtool.exe) in Windows Kits directory."""
-    kits_dir = r"C:\Program Files (x86)\Windows Kits"
-    if not os.path.exists(kits_dir):
-        return None
-    
-    found_paths = []
-    for root, dirs, files in os.walk(kits_dir):
-        if tool_name in files:
-            # Prefer x64 tools if running on 64-bit Windows
-            full_path = os.path.join(root, tool_name)
-            if "x64" in root:
-                return full_path
-            found_paths.append(full_path)
-            
-    if found_paths:
-        return found_paths[0]
+    kits_dirs = [r"C:\Program Files (x86)\Windows Kits", r"C:\Program Files\Windows Kits"]
+    for kits_dir in kits_dirs:
+        if not os.path.exists(kits_dir):
+            continue
+        found_paths = []
+        for root, dirs, files in os.walk(kits_dir):
+            if tool_name in files:
+                # Prefer x64 tools if running on 64-bit Windows
+                full_path = os.path.join(root, tool_name)
+                if "x64" in root:
+                    return full_path
+                found_paths.append(full_path)
+                
+        if found_paths:
+            return found_paths[0]
     return None
 
 def create_visual_assets(source_image_path, assets_dir):

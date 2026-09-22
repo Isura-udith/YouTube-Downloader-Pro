@@ -31,6 +31,15 @@ def build_exe():
         '--name=YT_Downloader_Pro',
         '--add-data=templates;templates',
         '--add-data=static;static',
+        '--collect-all=webview',
+        '--collect-all=clr_loader',
+        '--collect-all=pythonnet',
+        '--collect-all=curl_cffi',
+        '--hidden-import=webview',
+        '--hidden-import=clr_loader',
+        '--hidden-import=pythonnet',
+        '--hidden-import=clr_loader.ffi',
+        '--hidden-import=curl_cffi',
         '--clean'
     ]
     
@@ -92,6 +101,18 @@ def build_exe():
     print("="*50)
 
 if __name__ == '__main__':
+    # Auto-switch to the project virtual environment if run directly from global Python
+    if sys.prefix == sys.base_prefix:
+        _app_dir = os.path.dirname(os.path.abspath(__file__))
+        _venv_py = os.path.join(_app_dir, '.venv', 'Scripts', 'python.exe')
+        if not os.path.exists(_venv_py):
+            _venv_py = os.path.join(_app_dir, '.venv', 'bin', 'python')
+        if os.path.exists(_venv_py) and os.environ.get('__YT_BUILD_VENV_SWITCHED') != '1':
+            import subprocess
+            os.environ['__YT_BUILD_VENV_SWITCHED'] = '1'
+            print("Switching to project virtual environment (.venv)...")
+            sys.exit(subprocess.call([_venv_py] + sys.argv))
+
     # Make sure we are in the script's directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(script_dir)

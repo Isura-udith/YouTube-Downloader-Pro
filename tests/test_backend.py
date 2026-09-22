@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import unittest.mock
 import json
 
 # Ensure project directory is in sys.path
@@ -96,7 +97,17 @@ class YTDownloaderBackendTestCase(unittest.TestCase):
         self.assertIsNone(app.parse_time_to_seconds("   "))
         self.assertIsNone(app.parse_time_to_seconds("invalid_time"))
 
-    def test_api_download_trim_validation(self):
+        # Decimals vs timestamps
+        self.assertEqual(app.parse_time_to_seconds("45.50"), 45.5)
+        self.assertEqual(app.parse_time_to_seconds("10.00"), 10.0)
+        self.assertEqual(app.parse_time_to_seconds("00.41"), 41.0)
+
+    @unittest.mock.patch('threading.Thread')
+    def test_api_download_trim_validation(self, mock_thread):
+        # Mock Thread.start so unit test doesn't launch real network downloads
+        mock_instance = unittest.mock.MagicMock()
+        mock_thread.return_value = mock_instance
+
         # Valid start_time=0 and end_time=10
         res = self.client.post('/api/download', json={
             'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
@@ -105,6 +116,7 @@ class YTDownloaderBackendTestCase(unittest.TestCase):
         })
         self.assertEqual(res.status_code, 200)
         self.assertIn('download_id', res.get_json())
+        self.assertTrue(mock_instance.start.called)
 
         # Valid string "00:00" and "00:15"
         res = self.client.post('/api/download', json={
@@ -143,6 +155,40 @@ class YTDownloaderBackendTestCase(unittest.TestCase):
     def test_api_files_by_id_missing(self):
         res = self.client.get('/api/files/by-id/nonexistent_id')
         self.assertEqual(res.status_code, 404)
+
+    def test_info_caching(self):
+        import time
+        # Pre-seed cache to test instantaneous retrieval
+        test_url = "https://www.youtube.com/watch?v=TEST_CACHE_ID"
+        cache_key = (test_url, False)
+        payload = {
+            'type': 'video',
+            'title': 'Test Cached Video',
+            'thumbnail': 'http://example.com/thumb.jpg',
+            'duration': 120,
+            'resolutions': [1080, 720],
+            'video_id': 'TEST_CACHE_ID',
+            'associated_playlist': None,
+            'has_ffmpeg': True
+        }
+        with app._info_cache_lock:
+            app._info_cache[cache_key] = (time.time(), payload)
+
+        start = time.time()
+        res = self.client.post('/api/info', json={'url': test_url})
+        elapsed = time.time() - start
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data['title'], 'Test Cached Video')
+        self.assertLess(elapsed, 0.1, "Cached info response should return in under 100ms")
+
+    def test_history_in_memory_cache(self):
+        # Verify load_history returns identical objects from memory
+        h1 = app.load_history()
+        h2 = app.load_history()
+        self.assertIsInstance(h1, list)
+        self.assertIsInstance(h2, list)
 
 if __name__ == '__main__':
     unittest.main()

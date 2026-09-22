@@ -18,6 +18,7 @@ import urllib.parse as urlparse
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import yt_dlp
+from yt_dlp.networking.impersonate import ImpersonateTarget
 
 # ---------------------------------------------------------------------------
 # Logging Setup — Enterprise-grade structured logging with rotation
@@ -52,21 +53,22 @@ if not getattr(sys, 'frozen', False):
     ))
     logger.addHandler(_console_handler)
 
-# Redirect stdout/stderr to prevent crashes in frozen (hidden console) mode,
-# but keep the file logger active so errors are never lost.
-class DummyStream:
-    def write(self, x): pass
-    def flush(self): pass
-
 if getattr(sys, 'frozen', False):
-    sys.stdout = DummyStream()
-    sys.stderr = DummyStream()
+    try:
+        sys.stdout = open(os.devnull, 'w', encoding='utf-8')
+        sys.stderr = open(os.devnull, 'w', encoding='utf-8')
+    except Exception:
+        class DummyStream:
+            def write(self, x): pass
+            def flush(self): pass
+        sys.stdout = DummyStream()
+        sys.stderr = DummyStream()
 
 # ---------------------------------------------------------------------------
 # Thread-safety primitives
 # ---------------------------------------------------------------------------
-downloads_lock = threading.Lock()       # Guards the in-memory `downloads` dict
-file_io_lock = threading.Lock()         # Guards JSON file read/write operations
+downloads_lock = threading.RLock()      # Guards the in-memory `downloads` dict
+file_io_lock = threading.RLock()        # Guards JSON file read/write operations
 shutdown_event = threading.Event()      # Signals background threads to stop
 atexit.register(shutdown_event.set)
 
@@ -185,7 +187,17 @@ def save_json_atomic(filepath, data):
         try:
             with open(temp_filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            os.replace(temp_filepath, filepath)
+            
+            # Windows retry loop in case of transient file locking by indexers/antivirus
+            for attempt in range(3):
+                try:
+                    os.replace(temp_filepath, filepath)
+                    break
+                except (PermissionError, OSError) as pe:
+                    if attempt < 2:
+                        time.sleep(0.05 * (attempt + 1))
+                    else:
+                        raise pe
         except Exception as e:
             if os.path.exists(temp_filepath):
                 try:
@@ -270,49 +282,63 @@ def clean_ansi(s):
         return ""
     return ANSI_ESCAPE.sub('', s).strip()
 
+# In-memory history cache to eliminate redundant disk reads
+_history_cache = None
+_history_lock = threading.RLock()
+
+# In-memory video/playlist info cache to make repeat fetches instantaneous
+_info_cache = {}
+_info_cache_lock = threading.Lock()
+INFO_CACHE_TTL = 900  # 15 minutes
+
+def _base_ydl_opts():
+    """Returns common yt-dlp options for JS runtime, browser impersonation, and fast network throughput."""
+    opts = {
+        'js_runtimes': {'node': {}},
+        'socket_timeout': 15,
+        'retries': 3,
+        'file_access_retries': 3,
+        'extractor_retries': 3,
+    }
+    try:
+        opts['impersonate'] = ImpersonateTarget.from_str('chrome')
+    except Exception:
+        pass  # curl_cffi may not be installed; downloads will still work via js_runtimes
+    return opts
+
 def load_history():
-    with file_io_lock:
-        if os.path.exists(HISTORY_FILE):
-            try:
-                with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        return data
-                    return []
-            except Exception as e:
-                logger.warning('Failed to load history: %s', e)
-                return []
-    return []
+    global _history_cache
+    with _history_lock:
+        if _history_cache is not None:
+            return list(_history_cache)
+        with file_io_lock:
+            if os.path.exists(HISTORY_FILE):
+                try:
+                    with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        if isinstance(data, list):
+                            _history_cache = data
+                            return list(_history_cache)
+                except Exception as e:
+                    logger.warning('Failed to load history: %s', e)
+        _history_cache = []
+        return list(_history_cache)
 
 def save_history(history):
+    global _history_cache
+    with _history_lock:
+        _history_cache = list(history)
     save_json_atomic(HISTORY_FILE, history)
 
 def add_history_item(history_item):
     """Thread-safe and atomic prepend to persistent history."""
-    with file_io_lock:
-        history = []
-        if os.path.exists(HISTORY_FILE):
-            try:
-                with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        history = data
-            except Exception as e:
-                logger.warning('Failed to load history in add_history_item: %s', e)
-                history = []
+    with _history_lock:
+        history = load_history()
+        dl_id = history_item.get('download_id')
+        if dl_id:
+            history = [h for h in history if h.get('download_id') != dl_id]
         history.insert(0, history_item)
-        temp_filepath = f"{HISTORY_FILE}.{uuid.uuid4().hex}.tmp"
-        try:
-            with open(temp_filepath, 'w', encoding='utf-8') as f:
-                json.dump(history, f, indent=2, ensure_ascii=False)
-            os.replace(temp_filepath, HISTORY_FILE)
-        except Exception as e:
-            if os.path.exists(temp_filepath):
-                try:
-                    os.remove(temp_filepath)
-                except Exception:
-                    pass
-            logger.error('Failed to save %s in add_history_item: %s', HISTORY_FILE, e)
+        save_history(history)
 
 def parse_youtube_url(url):
     url = url.strip()
@@ -374,13 +400,26 @@ def get_info():
     video_id, playlist_id = parse_youtube_url(url)
     
     # If it is a playlist-only URL or contains playlist in the path and no video_id
-    is_playlist_only = ('playlist' in url) or (playlist_id and not video_id)
+    is_playlist_only = bool(('playlist' in url) or (playlist_id and not video_id))
+
+    # Check in-memory info cache
+    now = time.time()
+    cache_key = (url, is_playlist_only)
+    with _info_cache_lock:
+        if cache_key in _info_cache:
+            cached_time, cached_payload = _info_cache[cache_key]
+            if now - cached_time < INFO_CACHE_TTL:
+                payload_copy = dict(cached_payload)
+                payload_copy['has_ffmpeg'] = check_ffmpeg()
+                logger.info('Returning cached info for: %s', url[:120])
+                return jsonify(payload_copy)
     
     ffmpeg_loc = get_ffmpeg_location()
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'ignoreconfig': True,
+        **_base_ydl_opts(),
     }
     if ffmpeg_loc:
         ydl_opts['ffmpeg_location'] = ffmpeg_loc
@@ -412,13 +451,13 @@ def get_info():
                             'duration': entry.get('duration'),
                             'thumbnail': thumb
                         })
-                return jsonify({
+                result = {
                     'type': 'playlist',
                     'title': info.get('title'),
                     'playlist_id': info.get('id'),
                     'entries': entries,
                     'has_ffmpeg': check_ffmpeg()
-                })
+                }
             else:
                 resolutions = set()
                 for f in info.get('formats', []):
@@ -426,7 +465,7 @@ def get_info():
                         resolutions.add(f.get('height'))
                 resolutions = sorted(list(resolutions), reverse=True)
                 
-                return jsonify({
+                result = {
                     'type': 'video',
                     'title': info.get('title'),
                     'thumbnail': info.get('thumbnail'),
@@ -435,7 +474,11 @@ def get_info():
                     'video_id': info.get('id'),
                     'associated_playlist': playlist_id if (playlist_id and video_id) else None,
                     'has_ffmpeg': check_ffmpeg()
-                })
+                }
+
+            with _info_cache_lock:
+                _info_cache[cache_key] = (now, result)
+            return jsonify(result)
     except Exception as e:
         logger.error('Failed to extract info for %s: %s', url[:120], e)
         return jsonify({'error': str(e), 'code': 'EXTRACTION_FAILED'}), 500
@@ -449,17 +492,19 @@ def parse_time_to_seconds(time_str):
     if not time_str:
         return None
 
-    # Check if the string uses dot as a time separator (e.g., 03.58 or 1.04.30)
-    # We treat dots as colons if:
-    # 1. There are multiple dots (e.g., 1.04.30)
-    # 2. Or the string matches MM.SS (e.g., 03.58, 1.30, 00.41) where the last part has exactly 2 digits
-    if '.' in time_str and ':' not in time_str:
+    # Handle multiple dots: e.g. 01.04.30 -> 01:04:30
+    if time_str.count('.') > 1 and ':' not in time_str:
+        time_str = time_str.replace('.', ':')
+    elif '.' in time_str and ':' not in time_str:
         parts = time_str.split('.')
-        if len(parts) > 2 or (len(parts) == 2 and len(parts[1]) == 2):
-            time_str = time_str.replace('.', ':')
+        # Treat as MM:SS only if seconds < 60 and (has leading zero or single-digit minute)
+        if len(parts) == 2 and len(parts[1]) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            sec = int(parts[1])
+            if 0 <= sec < 60 and (parts[0].startswith('0') or len(parts[0]) == 1):
+                time_str = f"{parts[0]}:{parts[1]}"
 
     try:
-        # If it's a pure number of seconds (e.g., "45" or "45.5" or "0")
+        # If it's a pure number of seconds (e.g., "45" or "45.5" or "45.50" or "0")
         if ':' not in time_str:
             return float(time_str)
     except ValueError:
@@ -514,12 +559,19 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
     
     logger.info('Download started: %s [%s] id=%s', title or url, download_type, download_id)
     
+    last_hook_time = [0.0]
+
     def my_hook(d):
         with downloads_lock:
             if downloads.get(download_id, {}).get('cancel_requested'):
                 raise ValueError("Download aborted by user")
             
         if d['status'] == 'downloading':
+            now = time.monotonic()
+            # Throttle updates to ~13/sec to prevent lock and GIL thrashing
+            if now - last_hook_time[0] < 0.075:
+                return
+            last_hook_time[0] = now
             try:
                 p = d.get('_percent_str', '0%')
                 p = clean_ansi(p).replace('%', '').strip()
@@ -537,6 +589,7 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
             except Exception:
                 pass
         elif d['status'] == 'finished':
+            last_hook_time[0] = 0.0
             with downloads_lock:
                 downloads[download_id]['progress'] = 100
                 downloads[download_id]['status_text'] = 'Processing file...'
@@ -570,22 +623,31 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'ignoreconfig': True
+        'ignoreconfig': True,
+        'concurrent_fragment_downloads': 5,
+        'buffersize': 1024 * 1024,
+        **_base_ydl_opts(),
     }
     if ffmpeg_loc:
         ydl_opts['ffmpeg_location'] = ffmpeg_loc
 
-    # Add trimming options
+    # Add trimming options and unique output template
     start_s = parse_time_to_seconds(start_time)
     end_s = parse_time_to_seconds(end_time)
     if start_s is not None or end_s is not None:
         ydl_opts['force_keyframes_at_cuts'] = True
-        # Use default args to capture current values (avoids late-binding closure bug)
-        def _make_ranges(s=start_s, e=end_s):
+        s_val = start_s if start_s is not None else 0.0
+        e_val = end_s if end_s is not None else float('inf')
+        def _make_ranges(s=s_val, e=e_val):
             def _ranges(info_dict, ydl):
-                return [{'start_time': s if s is not None else 0.0, 'end_time': e if e is not None else float('inf')}]
+                return [{'start_time': s, 'end_time': e}]
             return _ranges
         ydl_opts['download_ranges'] = _make_ranges()
+        
+        # Append trim label to output template to prevent collisions with full-length or other clips
+        s_lbl = f"{int(s_val)}s" if s_val.is_integer() else f"{s_val:.1f}s"
+        e_lbl = f"{int(e_val)}s" if (end_s is not None and e_val.is_integer()) else (f"{e_val:.1f}s" if end_s is not None else "end")
+        ydl_opts['outtmpl'] = os.path.join(target_dir, f'%(title)s [{s_lbl}-{e_lbl}].%(ext)s')
 
     if download_type == 'mp3':
         if embed_metadata and check_ffmpeg():
@@ -695,6 +757,18 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
             
             logger.info('Download completed: %s -> %s', actual_title, expected_filename)
             
+            # Ensure accurate file size from disk if available
+            final_filesize = downloads[download_id].get('filesize', 'Unknown')
+            if expected_filename and os.path.exists(expected_filename):
+                try:
+                    bytes_on_disk = os.path.getsize(expected_filename)
+                    if bytes_on_disk > 0:
+                        final_filesize = f"{bytes_on_disk / (1024 * 1024):.1f} MB"
+                        with downloads_lock:
+                            downloads[download_id]['filesize'] = final_filesize
+                except Exception:
+                    pass
+
             # Save to persistent history atomically
             history_item = {
                 'download_id': download_id,
@@ -707,7 +781,7 @@ def download_worker(url, download_type, resolution, bitrate, subtitles, download
                 'bitrate': bitrate if download_type == 'mp3' else None,
                 'filename': basename,
                 'filepath': expected_filename,
-                'filesize': downloads[download_id].get('filesize', 'Unknown'),
+                'filesize': final_filesize,
                 'timestamp': datetime.datetime.now().isoformat()
             }
             add_history_item(history_item)
@@ -748,11 +822,13 @@ def add_location():
         return jsonify({'error': f"Invalid or unwritable directory path: {str(e)}"}), 400
         
     settings = load_settings()
+    locations = settings.setdefault('locations', [])
     
-    # Check if duplicate path or name
-    for loc in settings['locations']:
-        if loc['path'].lower() == path.lower():
-            return jsonify({'error': f"Directory already exists in list: '{loc['name']}'"}), 400
+    # Check if duplicate path or name using normalized paths
+    norm_path = os.path.normcase(os.path.normpath(path))
+    for loc in locations:
+        if os.path.normcase(os.path.normpath(loc.get('path', ''))) == norm_path:
+            return jsonify({'error': f"Directory already exists in list: '{loc.get('name', '')}'"}), 400
             
     loc_id = str(uuid.uuid4())
     new_loc = {
@@ -761,7 +837,7 @@ def add_location():
         'path': path,
         'is_default': False
     }
-    settings['locations'].append(new_loc)
+    locations.append(new_loc)
     save_settings(settings)
     
     return jsonify(new_loc)
@@ -1002,6 +1078,7 @@ def search_youtube():
         'no_warnings': True,
         'extract_flat': 'in_playlist',
         'ignoreconfig': True,
+        **_base_ydl_opts(),
     }
     
     try:
@@ -1318,6 +1395,7 @@ def fetch_dynamic_suggestions_sync():
             'no_warnings': True,
             'extract_flat': 'in_playlist',
             'ignoreconfig': True,
+            **_base_ydl_opts(),
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # Fetch 15 trending songs
@@ -1423,18 +1501,32 @@ def serve_file(filename):
 def serve_file_by_id(download_id):
     client_id = request.args.get('client_id') or request.headers.get('X-Client-ID')
     download = request.args.get('download', 'false').lower() == 'true'
+    filepath = None
+    
+    # Check history first
     history = load_history()
     for item in history:
         if item.get('download_id') == download_id:
             if not is_local_mode() and client_id and item.get('client_id') != client_id:
                 return jsonify({'error': 'Unauthorized'}), 403
             filepath = item.get('filepath')
-            if filepath and os.path.exists(filepath):
-                dirpath = os.path.dirname(filepath)
-                fname = os.path.basename(filepath)
-                return send_from_directory(dirpath, fname, as_attachment=download)
-            return jsonify({'error': 'File not found on disk'}), 404
-    return jsonify({'error': 'Download record not found'}), 404
+            break
+            
+    # Fallback to in-memory active downloads
+    if not filepath or not os.path.exists(filepath):
+        with downloads_lock:
+            dl = downloads.get(download_id)
+            if dl:
+                if not is_local_mode() and client_id and dl.get('client_id') != client_id:
+                    return jsonify({'error': 'Unauthorized'}), 403
+                filepath = dl.get('filepath')
+                
+    if filepath and os.path.exists(filepath):
+        dirpath = os.path.dirname(filepath)
+        fname = os.path.basename(filepath)
+        return send_from_directory(dirpath, fname, as_attachment=download)
+        
+    return jsonify({'error': 'File not found on disk'}), 404
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
@@ -1450,23 +1542,34 @@ def open_folder():
         
     data = request.json or {}
     download_id = data.get('download_id')
+    filepath = None
+    
+    # Check history first
     history = load_history()
     for item in history:
         if item.get('download_id') == download_id:
             filepath = item.get('filepath')
-            if filepath and os.path.exists(filepath):
-                try:
-                    import subprocess
-                    if sys.platform == 'win32':
-                        subprocess.Popen(['explorer', f'/select,{os.path.abspath(filepath)}'])
-                    elif sys.platform == 'darwin':
-                        subprocess.Popen(['open', '-R', filepath])
-                    else:
-                        subprocess.Popen(['xdg-open', os.path.dirname(filepath)])
-                    return jsonify({'success': True})
-                except Exception as e:
-                    return jsonify({'error': str(e)}), 500
             break
+            
+    # Fallback to in-memory active downloads
+    if not filepath or not os.path.exists(filepath):
+        with downloads_lock:
+            dl = downloads.get(download_id)
+            if dl and dl.get('filepath'):
+                filepath = dl['filepath']
+                
+    if filepath and os.path.exists(filepath):
+        try:
+            import subprocess
+            if sys.platform == 'win32':
+                subprocess.Popen(['explorer', f'/select,{os.path.abspath(filepath)}'])
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', '-R', filepath])
+            else:
+                subprocess.Popen(['xdg-open', os.path.dirname(filepath)])
+            return jsonify({'success': True})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
             
     return jsonify({'error': 'File not found'}), 404
 
@@ -1474,6 +1577,141 @@ def open_browser(port):
     # Wait a bit for server to start
     time.sleep(1.5)
     webbrowser.open(f'http://127.0.0.1:{port}/')
+
+def start_desktop_window(host, port):
+    """Launches the application inside a native desktop window using pywebview."""
+    os.environ['FLASK_SHOW_BANNER'] = '0'
+    import logging as py_logging
+    py_logging.getLogger('werkzeug').setLevel(py_logging.ERROR)
+
+    try:
+        import webview
+    except Exception as ie:
+        logger.warning('pywebview is not available (%s). Falling back to default web browser.', ie)
+        threading.Thread(target=open_browser, args=(port,), daemon=True).start()
+        app.run(host=host, port=port, debug=False, use_reloader=False)
+        return
+
+    # Start Flask server in a dedicated background daemon thread
+    flask_error = [None]  # mutable container to capture thread exceptions
+
+    def run_flask_server():
+        try:
+            logger.info('Flask thread starting on %s:%d ...', host, port)
+            app.run(host=host, port=port, debug=False, use_reloader=False)
+        except Exception as e:
+            flask_error[0] = e
+            logger.error('Flask server thread crashed: %s', e, exc_info=True)
+
+    server_thread = threading.Thread(target=run_flask_server, daemon=True)
+    server_thread.start()
+
+    # Wait until the server is actually serving HTTP responses (not just TCP)
+    server_ready = False
+    import urllib.request
+    for attempt in range(150):  # Up to ~30 seconds
+        # Check if the Flask thread died
+        if not server_thread.is_alive():
+            logger.error('Flask server thread died! Error: %s', flask_error[0])
+            break
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                pass
+            # TCP connected — now verify Flask is actually responding
+            resp = urllib.request.urlopen(f'http://{host}:{port}/', timeout=1)
+            if resp.status == 200:
+                server_ready = True
+                logger.info('Flask server ready after ~%.1fs', attempt * 0.2)
+                break
+        except Exception:
+            pass
+        time.sleep(0.2)
+
+    if not server_ready:
+        logger.error('Flask server did not respond within timeout (~30s). Thread alive: %s, Error: %s',
+                      server_thread.is_alive(), flask_error[0])
+
+    app_url = f'http://{host}:{port}/'
+    logger.info('Opening desktop window at %s', app_url)
+
+    if server_ready:
+        # Server is up — point webview directly at the app
+        load_url = app_url
+    else:
+        # Server might still be starting — use a loader page that auto-retries
+        loader_html = f'''
+        <html>
+        <head>
+            <style>
+                body {{
+                    background: #0b0f19; color: #fff; font-family: 'Segoe UI', sans-serif;
+                    display: flex; flex-direction: column; align-items: center;
+                    justify-content: center; height: 100vh; margin: 0;
+                }}
+                .spinner {{
+                    width: 48px; height: 48px; border: 4px solid rgba(255,255,255,0.15);
+                    border-top-color: #6366f1; border-radius: 50%;
+                    animation: spin 0.8s linear infinite; margin-bottom: 24px;
+                }}
+                @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+                p {{ font-size: 16px; opacity: 0.7; }}
+            </style>
+        </head>
+        <body>
+            <div class="spinner"></div>
+            <p id="msg">Starting YouTube Downloader Pro…</p>
+            <script>
+                const target = "{app_url}";
+                let attempts = 0;
+                function tryConnect() {{
+                    attempts++;
+                    fetch(target, {{ mode: "no-cors" }})
+                        .then(() => {{ window.location.href = target; }})
+                        .catch(() => {{
+                            if (attempts < 150) {{
+                                document.getElementById("msg").textContent =
+                                    "Starting YouTube Downloader Pro… (" + attempts + ")";
+                                setTimeout(tryConnect, 500);
+                            }} else {{
+                                document.getElementById("msg").textContent =
+                                    "Could not connect to server. Please restart the app.";
+                            }}
+                        }});
+                }}
+                setTimeout(tryConnect, 500);
+            </script>
+        </body>
+        </html>
+        '''
+        load_url = loader_html
+
+    # Create the native desktop window
+    if server_ready:
+        window = webview.create_window(
+            title='YouTube Downloader Pro',
+            url=load_url,
+            width=1280,
+            height=850,
+            min_size=(960, 640),
+            background_color='#0b0f19'
+        )
+    else:
+        window = webview.create_window(
+            title='YouTube Downloader Pro',
+            html=load_url,
+            width=1280,
+            height=850,
+            min_size=(960, 640),
+            background_color='#0b0f19'
+        )
+    
+    try:
+        # Start the native GUI loop on the main thread
+        webview.start(gui='edgechromium', debug=False)
+    except Exception as e:
+        logger.error('pywebview failed to start GUI (%s). Falling back to browser.', e)
+        threading.Thread(target=open_browser, args=(port,), daemon=True).start()
+        server_thread.join()
 
 if __name__ == '__main__':
     # Auto-switch to the project virtual environment if run directly from global Python
@@ -1505,18 +1743,25 @@ if __name__ == '__main__':
     # Start background thread to pre-fetch dynamic recommendations
     threading.Thread(target=fetch_dynamic_suggestions_thread, daemon=True).start()
         
-    # Auto-open browser when compiled
     is_frozen = getattr(sys, 'frozen', False)
     is_debug = not is_frozen
     
     if is_local_mode():
         port = find_free_port(5000)
         host = '127.0.0.1'
-        if is_frozen:
+        
+        if '--headless' in sys.argv:
+            logger.info('Starting in headless mode on %s:%d (debug=%s)', host, port, is_debug)
+            app.run(host=host, port=port, debug=is_debug, use_reloader=is_debug)
+        elif '--browser' in sys.argv:
+            logger.info('Starting in browser mode on %s:%d (debug=%s)', host, port, is_debug)
             threading.Thread(target=open_browser, args=(port,), daemon=True).start()
+            app.run(host=host, port=port, debug=is_debug, use_reloader=is_debug)
+        else:
+            logger.info('Starting in standalone desktop window on %s:%d', host, port)
+            start_desktop_window(host, port)
     else:
         port = int(os.environ.get('PORT', 5000))
         host = '0.0.0.0'
-    
-    logger.info('Starting server on %s:%d (debug=%s)', host, port, is_debug)
-    app.run(host=host, port=port, debug=is_debug, use_reloader=is_debug)
+        logger.info('Starting cloud server on %s:%d (debug=%s)', host, port, is_debug)
+        app.run(host=host, port=port, debug=is_debug, use_reloader=is_debug)

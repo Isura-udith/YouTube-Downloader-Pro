@@ -157,10 +157,15 @@ function parseTimeToSecondsClient(timeStr) {
     timeStr = String(timeStr).trim();
     if (!timeStr) return null;
 
-    if (timeStr.includes('.') && !timeStr.includes(':')) {
+    if (timeStr.split('.').length > 2 && !timeStr.includes(':')) {
+        timeStr = timeStr.replace(/\./g, ':');
+    } else if (timeStr.includes('.') && !timeStr.includes(':')) {
         const parts = timeStr.split('.');
-        if (parts.length > 2 || (parts.length === 2 && parts[1].length === 2)) {
-            timeStr = timeStr.replace(/\./g, ':');
+        if (parts.length === 2 && parts[1].length === 2 && /^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1])) {
+            const sec = parseInt(parts[1], 10);
+            if (sec < 60 && (parts[0].startsWith('0') || parts[0].length === 1)) {
+                timeStr = `${parts[0]}:${parts[1]}`;
+            }
         }
     }
 
@@ -727,7 +732,7 @@ async function pollQueueStatus() {
 
 // Render the Active Queue tab list (declared as var so it can be wrapped by adaptive polling)
 var renderQueueList = function(activeDownloads) {
-    const ids = Object.keys(activeDownloads);
+    const ids = Object.keys(activeDownloads || {});
     
     // Filter active items for badges
     const runningDownloads = ids.filter(id => 
@@ -745,15 +750,21 @@ var renderQueueList = function(activeDownloads) {
     }
 
     if (ids.length === 0) {
-        queueList.innerHTML = `
-            <div class="empty-state">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                <p>No downloads in progress or history.</p>
-                <button class="empty-btn" onclick="switchTab('downloader')">Start a Download</button>
-            </div>
-        `;
+        if (!queueList.querySelector('.empty-state')) {
+            queueList.innerHTML = `
+                <div class="empty-state">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    <p>No downloads in progress or history.</p>
+                    <button class="empty-btn" onclick="switchTab('downloader')">Start a Download</button>
+                </div>
+            `;
+        }
         return;
     }
+
+    // Remove empty state if present
+    const emptyState = queueList.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
 
     // Sort queue: running items first, then errors/completed
     const sortedIds = ids.sort((a, b) => {
@@ -761,7 +772,18 @@ var renderQueueList = function(activeDownloads) {
         return (statusOrder[activeDownloads[a].status] || 9) - (statusOrder[activeDownloads[b].status] || 9);
     });
 
-    let html = '';
+    const activeSet = new Set(sortedIds);
+
+    // Remove cards that are no longer in active queue
+    const existingCards = queueList.querySelectorAll('.queue-item');
+    existingCards.forEach(card => {
+        const id = card.getAttribute('data-download-id');
+        if (id && !activeSet.has(id)) {
+            card.remove();
+        }
+    });
+
+    // In-place reconciliation or element insertion
     sortedIds.forEach(id => {
         const dl = activeDownloads[id];
         let statusText = dl.status_text || 'Processing...';
@@ -791,8 +813,59 @@ var renderQueueList = function(activeDownloads) {
             statusColor = 'var(--text-muted)';
         }
 
-        html += `
-            <div class="queue-item" id="queue-item-${id}">
+        let card = document.getElementById(`queue-item-${id}`);
+        if (card) {
+            // In-place update: zero thumbnail reloading, fluid animations
+            const statusEl = card.querySelector('.queue-status-text');
+            if (statusEl) {
+                statusEl.textContent = statusText;
+                statusEl.style.color = statusColor;
+            }
+
+            const metaSpan = card.querySelector('.queue-dynamic-meta');
+            if (metaSpan) {
+                let dynamicHtml = '';
+                if (isRunning) {
+                    dynamicHtml += `<span>Size: <strong>${escapeHtml(dl.filesize || 'Unknown')}</strong></span>`;
+                }
+                if (speedDisplay) {
+                    dynamicHtml += `<span>${speedDisplay}</span>`;
+                }
+                metaSpan.innerHTML = dynamicHtml;
+            }
+
+            const fillEl = card.querySelector('.queue-progress-fill');
+            if (fillEl) {
+                fillEl.style.width = `${progressBarWidth}%`;
+                fillEl.style.background = dl.status === 'error' ? 'var(--danger)' : '';
+            }
+
+            const actionContainer = card.querySelector('.queue-action-container');
+            if (actionContainer) {
+                if (isRunning) {
+                    if (!actionContainer.querySelector('.abort-btn')) {
+                        actionContainer.innerHTML = `<button class="abort-btn" onclick="abortDownload('${id}')" title="Cancel Download">&times;</button>`;
+                    }
+                } else {
+                    actionContainer.innerHTML = '';
+                }
+            }
+        } else {
+            // Create new queue item element
+            card = document.createElement('div');
+            card.className = 'queue-item';
+            card.id = `queue-item-${id}`;
+            card.setAttribute('data-download-id', id);
+
+            let dynamicMetaHtml = '';
+            if (isRunning) {
+                dynamicMetaHtml += `<span>Size: <strong>${escapeHtml(dl.filesize || 'Unknown')}</strong></span>`;
+            }
+            if (speedDisplay) {
+                dynamicMetaHtml += `<span>${speedDisplay}</span>`;
+            }
+
+            card.innerHTML = `
                 <img class="queue-thumbnail" src="${escapeHtml(dl.thumbnail || '/static/logo-placeholder.png')}" alt="" onerror="this.onerror=null;this.src='/static/logo-placeholder.png';">
                 <div class="queue-details">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -800,24 +873,25 @@ var renderQueueList = function(activeDownloads) {
                         <span class="format-pill ${dl.format}">${dl.format.toUpperCase()} ${dl.resolution ? dl.resolution + 'p' : ''}</span>
                     </div>
                     <div class="queue-meta">
-                        <span style="color: ${statusColor}; font-weight: 700;">${escapeHtml(statusText)}</span>
-                        ${isRunning ? `<span>Size: <strong>${escapeHtml(dl.filesize || 'Unknown')}</strong></span>` : ''}
-                        ${speedDisplay ? `<span>${speedDisplay}</span>` : ''}
+                        <span class="queue-status-text" style="color: ${statusColor}; font-weight: 700;">${escapeHtml(statusText)}</span>
+                        <span class="queue-dynamic-meta" style="display: flex; flex-wrap: wrap; gap: 1rem;">${dynamicMetaHtml}</span>
                     </div>
                     <div class="queue-progress-bar">
                         <div class="queue-progress-fill" style="width: ${progressBarWidth}%; ${dl.status === 'error' ? 'background: var(--danger);' : ''}"></div>
                     </div>
                 </div>
-                ${isRunning ? `
-                    <div class="queue-action">
-                        <button class="abort-btn" onclick="abortDownload('${id}')" title="Cancel Download">&times;</button>
-                    </div>
-                ` : ''}
-            </div>
-        `;
-    });
+                <div class="queue-action queue-action-container">
+                    ${isRunning ? `<button class="abort-btn" onclick="abortDownload('${id}')" title="Cancel Download">&times;</button>` : ''}
+                </div>
+            `;
+            queueList.appendChild(card);
+        }
 
-    queueList.innerHTML = html;
+        // Maintain sort order in DOM without recreating
+        if (card.parentNode === queueList) {
+            queueList.appendChild(card);
+        }
+    });
 };
 
 // Abort active task
@@ -844,10 +918,13 @@ async function loadHistory() {
     }
 }
 
+let _lastRenderedHistorySignature = '';
+
 function renderHistoryList(historyItems) {
     historyCache = Array.isArray(historyItems) ? historyItems : [];
 
     if (historyCache.length === 0) {
+        _lastRenderedHistorySignature = 'empty';
         historyList.innerHTML = `
             <div class="empty-state">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M9 12l2 2 4-4"/></svg>
@@ -856,6 +933,12 @@ function renderHistoryList(historyItems) {
         `;
         return;
     }
+
+    const signature = historyCache.map(h => `${h.download_id}_${h.file_exists}_${h.filesize}`).join('|');
+    if (signature === _lastRenderedHistorySignature && historyList.children.length > 0) {
+        return; // Data unchanged, prevent reflow and thumbnail reloads
+    }
+    _lastRenderedHistorySignature = signature;
 
     let html = '';
     historyCache.forEach(item => {
@@ -1195,8 +1278,8 @@ function stopMedia() {
 // Load and Render Suggestions/Recommendations
 async function loadSuggestions(force = false) {
     try {
-        // Show skeleton loading animations while refreshing
-        if (suggestionsGrid) {
+        // Show skeleton loading animations only when grid is empty or force refreshing
+        if (suggestionsGrid && (force || suggestionsGrid.children.length === 0 || suggestionsGrid.querySelector('.skeleton-card'))) {
             suggestionsGrid.innerHTML = `
                 <div class="skeleton-card">
                     <div class="skeleton-thumb"></div>
